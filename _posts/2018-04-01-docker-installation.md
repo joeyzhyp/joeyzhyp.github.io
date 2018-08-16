@@ -4,7 +4,6 @@ title:      "Docker and Nvidia-Docker Installation"
 subtitle:   "Framework，docker，GPU"
 date:       2018-04-01
 author:     "ZHYP"
-header-img: "img/in-post/docker/docker.png"
 tags:
     - framework
     - docker
@@ -14,25 +13,23 @@ tags:
 
 ## **Docker介绍** 
 
-[参考链接](https://www.zhihu.com/question/28300645)
+> [参考链接](https://www.zhihu.com/question/28300645)
 
 Docker的思想来自于集装箱，集装箱解决了什么问题？在一艘大船上，可以把货物规整的摆放起来。并且各种各样的货物被集装箱标准化了，集装箱和集装箱之间不会互相影响。那么我就不需要专门运送水果的船和专门运送化学品的船了。只要这些货物在集装箱里封装的好好的，那我就可以用一艘大船把他们都运走。
 
 docker就是类似的理念。现在都流行云计算了，云计算就好比大货轮。docker就是集装箱。
 
-1.不同的应用程序可能会有不同的应用环境，比如.net开发的网站和php开发的网站依赖的软件就不一样，如果把他们依赖的软件都安装在一个服务器上就要调试很久，而且很麻烦，还会造成一些冲突。比如IIS和Apache访问端口冲突。这个时候你就要隔离.net开发的网站和php开发的网站。常规来讲，我们可以在服务器上创建不同的虚拟机在不同的虚拟机上放置不同的应用，但是虚拟机开销比较高。docker可以实现虚拟机隔离应用环境的功能，并且开销比虚拟机小，小就意味着省钱了。
+1. 不同的应用程序可能会有不同的应用环境，比如.net开发的网站和php开发的网站依赖的软件就不一样，如果把他们依赖的软件都安装在一个服务器上就要调试很久，而且很麻烦，还会造成一些冲突。比如IIS和Apache访问端口冲突。这个时候你就要隔离.net开发的网站和php开发的网站。常规来讲，我们可以在服务器上创建不同的虚拟机在不同的虚拟机上放置不同的应用，但是虚拟机开销比较高。docker可以实现虚拟机隔离应用环境的功能，并且开销比虚拟机小，小就意味着省钱了。
+2. 你开发软件的时候用的是Ubuntu，但是运维管理的都是centos，运维在把你的软件从开发环境转移到生产环境的时候就会遇到一些Ubuntu转centos的问题，比如：有个特殊版本的数据库，只有Ubuntu支持，centos不支持，在转移的过程当中运维就得想办法解决这样的问题。这时候要是有docker你就可以把开发环境直接封装转移给运维，运维直接部署你给他的docker就可以了。而且部署速度快。
+3. 在服务器负载方面，如果你单独开一个虚拟机，那么虚拟机会占用空闲内存的，docker部署的话，这些内存就会利用起来。
 
-2.你开发软件的时候用的是Ubuntu，但是运维管理的都是centos，运维在把你的软件从开发环境转移到生产环境的时候就会遇到一些Ubuntu转centos的问题，比如：有个特殊版本的数据库，只有Ubuntu支持，centos不支持，在转移的过程当中运维就得想办法解决这样的问题。这时候要是有docker你就可以把开发环境直接封装转移给运维，运维直接部署你给他的docker就可以了。而且部署速度快。
-
-3.在服务器负载方面，如果你单独开一个虚拟机，那么虚拟机会占用空闲内存的，docker部署的话，这些内存就会利用起来。
-
-总之docker就是集装箱原理。
+总之docker就是**集装箱原理**。
 
 
 
 ## Docker-CE安装
 
-[参考文档：官方Docs](https://docs.docker.com/install/linux/docker-ce/ubuntu/)
+> [参考文档：官方Docs](https://docs.docker.com/install/linux/docker-ce/ubuntu/)
 
 #### Prerequisites
 
@@ -150,7 +147,7 @@ $ sudo apt-get install \
 
 1. 获取 `.deb` 安装包
 
-   请找`朱文飞` or `张亚萍` 拿 docker-ce安装包；或者去[官网]( <https://download.docker.com/linux/ubuntu/dists/>,)下载安装包
+   去[官网]( <https://download.docker.com/linux/ubuntu/dists/>,)下载安装包
 
 2. 安装
 
@@ -210,7 +207,9 @@ Cgroup Driver: cgroupfs
 
 ## Nvidia-Docker安装
 
-[github地址](https://github.com/NVIDIA/nvidia-docker)    [github安装教程](https://github.com/NVIDIA/nvidia-docker/wiki/Installation-(version-2.0))
+> [github地址](https://github.com/NVIDIA/nvidia-docker)   
+>
+> [github安装教程](https://github.com/NVIDIA/nvidia-docker/wiki/Installation-(version-2.0))
 
 **Nvidia-Docker说明**
 
