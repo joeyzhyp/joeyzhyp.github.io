@@ -1,9 +1,9 @@
 ---
 layout:     post
 title:      "Docker and Nvidia-Docker Installation"
-subtitle:   "Framework，docker，GPU"
+subtitle:   ""
 date:       2018-04-01
-author:     "ZHYP"
+author:     "Joey"
 tags:
     - framework
     - docker

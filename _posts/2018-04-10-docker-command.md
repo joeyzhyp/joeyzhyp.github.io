@@ -1,9 +1,9 @@
 ---
 layout:     post
 title:      "Docker Basic Usage-Docker Command"
-subtitle:   "Framework，docker"
+subtitle:   "nvidia-docker/docker [image, container, valume ...], "
 date:       2018-04-10
-author:     "ZHYP"
+author:     "Joey"
 tags:
     - framework
     - docker
