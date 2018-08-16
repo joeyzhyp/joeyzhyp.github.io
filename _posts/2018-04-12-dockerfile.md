@@ -4,6 +4,8 @@ title:      "Use Dockerfile to Build Image"
 subtitle:   ""
 date:       2018-04-12
 author:     "Joey"
+catalog:      true
+multilingual: true
 tags:
     - framework
     - docker

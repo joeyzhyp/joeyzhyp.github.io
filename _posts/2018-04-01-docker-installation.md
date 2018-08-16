@@ -4,6 +4,8 @@ title:      "Docker and Nvidia-Docker Installation"
 subtitle:   ""
 date:       2018-04-01
 author:     "Joey"
+catalog:      true
+multilingual: true
 tags:
     - framework
     - docker

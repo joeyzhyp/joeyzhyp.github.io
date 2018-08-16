@@ -4,6 +4,8 @@ title:      "Docker Basic Usage-Docker Command"
 subtitle:   "nvidia-docker/docker [image, container, valume ...], "
 date:       2018-04-10
 author:     "Joey"
+catalog:      true
+multilingual: true
 tags:
     - framework
     - docker
