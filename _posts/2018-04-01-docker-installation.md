@@ -10,7 +10,7 @@ tags:
     - docker
 ---
 
-![docker](../img/in-post/docker/docker.png)
+![docker](/img/in-post/docker/docker.png)
 
 ## **Docker介绍** 
 
