@@ -13,7 +13,7 @@ tags:
 
 > [Git教程参考](http://www.yiibai.com/git/)
 
-#### git的基本使用
+### git的基本使用
 
 1. 当前工作区的文件修改状态：`git status`
 2. 将文件添加到待提交区：`git add` 
@@ -37,7 +37,7 @@ git config --global user.email "abc@piec.com.cn" # 设置你自己的邮箱
 
 
 
-#### Git fetch和git pull的区别
+### Git fetch和git pull的区别
 
 Git中从远程的分支获取最新的版本到本地有这样2个命令：
 
@@ -49,15 +49,15 @@ git log -p master..origin/master
 git merge origin/master
 ```
 
-    以上命令的含义：
+ 以上命令的含义：
 
-   首先从远程的origin的master主分支下载最新的版本到origin/master分支上
+- 首先从远程的origin的master主分支下载最新的版本到origin/master分支上
 
-   然后比较本地的master分支和origin/master分支的差别
+- 然后比较本地的master分支和origin/master分支的差别
 
-   最后进行合并
+- 最后进行合并
 
-   上述过程其实可以用以下更清晰的方式来进行：
+上述过程其实可以用以下更清晰的方式来进行：
 
 ```
 git fetch origin master:tmp
@@ -65,9 +65,7 @@ git diff tmp
 git merge tmp
 ```
 
-    从远程获取最新的版本到本地的test分支上
-
-   之后再进行比较合并
+ 从远程获取最新的版本到本地的test分支上，之后再进行比较合并
 
 2. git pull：相当于是从远程获取最新版本并merge到本地
 
@@ -77,13 +75,11 @@ git pull origin master
 
 上述命令其实相当于git fetch 和 git merge
 
-在实际使用中，git fetch更安全一些
-
-因为在merge前，我们可以查看更新情况，然后再决定是否合并
+在实际使用中，git fetch更安全一些， 因为在merge前，我们可以查看更新情况，然后再决定是否合并。
 
 
 
-#### 配合gitlab展开的工作流/协作方式
+### 配合gitlab展开的工作流/协作方式
 
 1. master分支为production/release/发布分支，master上永远是可以直接上线运行，经过了大部分测试，并且有对应文档的版本。（永久分支）
 2. develop分支是开发分支，最新的bug修改，feature的更新，都会整合到这个分支。（永久分支）
