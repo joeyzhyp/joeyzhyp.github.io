@@ -7,7 +7,7 @@ author:     "Joey"
 catalog:      true
 tags:
     - TensorFlow
-    - Distributed Framework
+    - Framework
 ---
 
 
@@ -42,7 +42,7 @@ tensorflow将模型维护和训练计算解耦合，将模型训练分为两个j
 
 体系架构如图所示：
 
-![ps-worker-architecture](../assets/ps-worker-architecture.png)
+![ps-worker-architecture](/img/in-post/tensorflow/ps-worker-architecture.png)
 
 ### 模型并行与数据并行
 
@@ -50,13 +50,13 @@ tensorflow将模型维护和训练计算解耦合，将模型训练分为两个j
 
 > 切分模型，模型不同层执行在不同设备上，一个批次样本可以在不同设备同时执行。TensorFlow尽量让相邻计算在同一台设备上完成节省网络开销。
 
-![tf-模型并行](../assets/tf-模型并行.png)
+![tf-模型并行](/img/in-post/tensorflow/tf-模型并行.png)
 
 **何谓数据并行？**
 
 > 切分数据，每个设备上都有相同的模型，但是每个设备都使用不同的训练样本进行模型训练。
 
-![tf-数据并行](../assets/tf-数据并行.png)
+![tf-数据并行](/img/in-post/tensorflow/tf-数据并行.png)
 
 我们接下来重点关注 **数据并行** 。
 
@@ -70,7 +70,7 @@ tensorflow将模型维护和训练计算解耦合，将模型训练分为两个j
 
 简而言之，每个设备都有ps的一份共享参数，和其他所有Worker的参数的copies：
 
-![in-graph-replication](../assets/in-graph-replication.png)
+![in-graph-replication](/img/in-post/tensorflow/in-graph-replication.png)
 
 使用图内复制时，所有op都在同一个图中，用一个client来生成图，把所有操作分配到集群所有ps和Worker上。图内复制和单机多卡类似，扩展到多机多卡，数据分发还是在客户端一个节点上。
 
@@ -88,7 +88,7 @@ tensorflow将模型维护和训练计算解耦合，将模型训练分为两个j
 
 简而言之，每个设备都有一份ps的共享参数，和自己的参数：
 
-![between-graph-replication](../assets/between-graph-replication.png)
+![between-graph-replication](/img/in-post/tensorflow/between-graph-replication.png)
 
 使用图间复制时，每一个Worker创建一个图，训练参数保存在ps，数据不分发，各个工作节点独立计算，计算完成把要更新的参数发给ps，ps更新参数即可。
 
@@ -108,7 +108,7 @@ tensorflow将模型维护和训练计算解耦合，将模型训练分为两个j
 
 synchronous training with stochastic gradient descent (SGD):
 
-![syn-sgd](../assets/syn-sgd.png)
+![syn-sgd](/img/in-post/tensorflow/syn-sgd.png)
 
 **同步更新，只有在所有设备都成功计算并向PS发送了梯度后，模型才会更新。**
 
@@ -124,7 +124,7 @@ synchronous training with stochastic gradient descent (SGD):
 
 Asynchronous training with stochastic gradient descent (SGD):
 
-![asyn-sgd](../assets/asyn-sgd.png)
+![asyn-sgd](/img/in-post/tensorflow/asyn-sgd.png)
 
 **异步更新，任何设备都不会等待来自任何其他设备的模型更新；计算出梯度后立即更新。**
 
