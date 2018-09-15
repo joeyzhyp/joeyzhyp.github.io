@@ -15,7 +15,7 @@ tags:
 
 [参考文献](http://robotica.unileon.es/index.php/PCL/OpenNI_tutorial_1:_Installing_and_testing)
 
-###Install dependencies
+### Install dependencies
 
 ```
 sudo add-apt-repository ppa:v-launchpad-jochen-sprickerhof-de/pcl
@@ -89,7 +89,7 @@ java -version
 javac -version
 ```
 
-![jdk_version](/image/jdk_version.png)
+![jdk_version](/image/in-post/pcl/jdk_version.png)
 
 
 
