@@ -154,6 +154,8 @@ Tensorflow分布式是有一个`Cluster`组成， 它包含一个或者多个PS�
 
 ### 训练步骤
 
+以图间复制，异步模式为例。
+
 #### 1. 创建一个Cluster 
 
 `Cluster` 就是一组job，tensorflow一般将job分为两类：
@@ -222,7 +224,7 @@ with tf.device(tf.train.replica_device_setter(
     )):
 ```
 
-#### 5. 定义model
+#### 5. 定义计算图
 
 与单机一样：
 
@@ -235,4 +237,183 @@ summary_op = ...
 ...
 ```
 
-#### 6.  
+#### 6. 创建Supervisor，管理session 
+
+`tf.train.Supervisor`能管理训练深度学习模型的通用功能：队列操作，模型保存，日志输出，会话生成等。它其实是对Saver（模型参数存储恢复）、Coordinator（多线程服务生命周期管理）、SessionManager（单机以及分布式会话管理）三个类的封装：
+
+`Coordinator`会监测程序的线程是否运行正常，任何异常的出现都会向Supervisor报告，此时Coordinator讲程序的停止条件设置为True，Supervisor停止训练并清理工作（关闭会话、回收内存等），其他服务检测到True后会各自关闭服务，终止线程。
+
+`SessionManager`帮助用户创建管理单机或是分布式会话，以便简化数据流图的生命周期和维护逻辑，同时负责将checkpoint文件中加载出的数据恢复到数据流图中。
+
+流程逻辑如下：
+
+1. 创建Supervisor实例，构造方法需要传入checkpoint文件和summary文件存储目录（Supervisor的logdir参数）
+2. 调用`tf.train.Supervisor.managed_session`，从Supervisor实例获取会话实例
+3. 使用该会话执行训练，训练中需要检查停止条件，保证训练正确性。
+
+获取managed_session时，Supervisor会通过QueueRunner同时启动一下三个服务：
+
+- 检查点服务：将数据流图中的参数定期保存，默认10min保存一次，且会识别global_step（Supervisor的global_step参数）
+- 汇总服务：默认2min一次
+- 步数计数器服务：向汇总添加global_step/sec，2min一次
+
+使用managed_session创建会话时，会**自动恢复上一次的结果并继续训练**。
+
+代码如下：
+
+```python
+sv = tf.train.Supervisor(is_chief=is_chief, 
+                         logdir=train_dir, 
+                         init_op=init_op, 
+                         summary_op=summary_op,
+                         saver=saver,
+                         save_model_secs=60,
+                         save_summaries_secs=60,
+                         recovery_wait_secs=1, 
+                         global_step=global_step，)
+
+config = tf.ConfigProto(
+        allow_soft_placement=True,
+        log_device_placement=False,
+        device_filters=["/job:ps", "/job:worker/task:%d" % FLAGS.task_index]
+    )
+
+# 异步：
+with sv.managed_session(server.target, config=config) as sess:
+```
+
+参数介绍：
+
+- tf.train.Supervisor:
+  - is_chief：是否为chief supervisor角色
+  - logdir：checkpoint文件和summary文件保存的路径
+  - init_op：初始化op
+  - summary_op：生成日志op，将会自动保存Summary，如果不想自动保存，设为None即可；
+  - saver：将保存checkpoint的saver对象传入，supervisor就会自动保存checkpoint，如果不想自动保存，就将其设为None；
+  - global_step：当前迭代的轮数，用于生成保存模型文件的文件名
+  - save_model_secs：自动保存模型的时间间隔，
+  - save_summaries_secs：自动日志输出的时间间隔
+
+- tf.ConfigProto:
+
+  - allow_soft_placement：为了避免手动指定的设备不存在这种情况, 将allow_soft_placement设置为 True, 这样 tensorFlow 会自动选择一个存在并且支持的设备来运行 operation.
+  - log_device_placement：记录operations 和 Tensor 被指派到哪个设备上运行
+  - device_filters：硬件过滤器，如果被设置的话，会话会忽略掉所有不匹配过滤器的硬件。
+
+- managed_session：
+
+  异步接口，用于生成会话。参数初始化之后即可运行
+
+- prepare_or_wait_for_session：
+
+  同步模式，用于生成会话。参数初始化完成并且chief supervisor准备好了才可以运行
+
+如果你去深入了解`managed_session` 的Python实现，你会发现，它只是对`prepare_or_wait_for_session` 的一个调用！两者最大的区别其实只是：
+
+- `prepare_or_wait_for_session` ： return sess
+- `managed_session` ：yield sess
+
+所以tf此处的异步，其实是通过yield同步函数来实现的。
+
+#### 7. 迭代训练
+
+```python
+with sv.managed_session(server.target, config=config) as sess:
+	while not sv.should_stop():
+      	sess.run([train_op, global_step])
+```
+
+
+
+#### 附：同步模式区别
+
+##### 1. 定义计算图时
+
+和异步模式定义计算图时的区别为：同步模式需要使用 `tf.train.SyncReplicasOptimizer` 函数处理同步更新；其次 `opt.minimize()`或`opt.apply_gradients()`的时候一定要传入`global_step`(用来同步的)。代码示例如下：
+
+```python
+opt = tf.train.SyncReplicasOptimizer(
+		tf.train.GradientDescentOptimizer(lr),
+		replicas_to_aggregate=num_worker,
+  		total_num_replicas=num_worker,
+  		replica_id=FLAGS.task_index
+)
+train_op=opt.minimizie(loss, global_step=global_step)
+```
+
+**参数说明：**
+
+- tf.train.GradientDescentOptimizer(lr)：定义优化方法
+- replicas_to_aggregate：每一轮更新参数需要多少个Worker计算出的梯度，即每一步更新中并行的Worker数。
+- total_num_replicas：指定的Worker的总数量
+- replica_id：当前Worker的index
+
+根据 `replicas_to_aggregate` 和 `total_num_replicas` 的释义，可以得出：
+
+- replicas_to_aggregate=total_num_replicas：全民参与，一个worker领取一个batch数据
+- replicas_to_aggregate>total_num_replicas：能者多劳，先完成自己batch的worker会继续领取未训练数据，PS会等到梯度份数到达并行数后进行模型参数计算
+- replicas_to_aggregate<total_num_replicas：替补等位，存在空闲的worker，取代可能出现的异常worker，确保训练过程不停滞。
+
+##### 2. 定义Chief Worker时
+
+在同步模式下，chief worker需要协调不同worker计算得到的参数梯度，并最终更新参数，这就需要它做一些额外的初始化工作：
+
+```python
+if is_chief:
+  	chief_queue_runner = opt.get_chief_queue_runner()
+    init_tokens_op = opt.get_init_tokers_op(0)
+```
+
+chief woker做额外工作的原因见此目录附。
+
+##### 3. 创建Supervisor时
+
+与异步模式使用`managed_session` 不同，同步模式使用`prepare_or_wait_for_session` 创建会话。
+
+##### 4. 迭代训练时，chief worker有额外动作
+
+在开始训练前，chief worker需要启动协调同步更新的队列并执行初始化操作。
+
+```python
+if is_chief:
+  sv.start_queue_runners(sess, [chief_queue_runner])
+  sess.run(init_tokens_op)
+```
+
+其他与异步模式相同
+
+chief woker做额外工作的原因见此目录附。
+
+##### 附：chief worker在同步模式的额外动作
+
+同步模式有两个概念：
+
+**梯度聚合器**：
+
+每一个模型参数有一个自己队列，收集来自不同worker的梯度值，梯度聚合器包含M个队列对应M个模型参数，每个队列收集来自N个worker计算出来的N个梯度值。
+
+**同步标记队列：**
+
+存储同步标记，实际上就是N个global_step值，每个worker领取一个，用于控制同步
+
+以所有Worker参与同步，即`replicas_to_aggregate=total_num_replicas` ，为例：
+
+**worker工作模式**：
+
+1. 从同步标记队列领取一个global_step，表示全局训练步数的同步标记
+2. 将同步标记值赋予worker的本地训练步数local_step
+3. 从PS获取最新模型参数
+4. 计算出M个梯度值
+5. 将M个梯度值推送到PS上的M个梯度队列中
+
+**PS工作模式**：
+
+1. 从梯度聚合器上收集worker推送过来的梯度值，每个队列收集N份（对应N个global_step下训练值）后，计算均值，收集齐M个均值后，得到M对{模型参数，梯度值}的聚合元组
+2. 更新模型参数
+3. 向同步标记队列推送N个global_step+1标记
+
+聚合器收集梯度值并校验local_step是否符合global_step，是则接收梯度值，计算能力强的worker提交梯度后由于没有同步标记可以领取所以被阻塞，PS集齐N份后更新参数，发布下次N个同步标记，开始下一步训练。
+
+由于初始PS不会更新参数发布同步标记，所以需要初始化同步标记队列——sync_init_op，直接向队列注入N个0标记。
+
+> 同步标记队列即是由chief Worker来实现
