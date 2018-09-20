@@ -62,41 +62,88 @@ tensorflow将模型维护和训练计算解耦合，将模型训练分为两个j
 
 ### 图内复制和图间复制
 
-图内复制和图间复制是数据并行模式按照数据流图构建模式分类而成；
-
 **何谓图内复制？**
 
 > In this approach, the client builds a single [`tf.Graph`](https://www.tensorflow.org/api_docs/python/tf/Graph) that contains one set of parameters (in [`tf.Variable`](https://www.tensorflow.org/api_docs/python/tf/Variable) nodes pinned to `/job:ps`); and multiple copies of the compute-intensive part of the model, each pinned to a different task in `/job:worker`.
 
-简而言之，每个设备都有ps的一份共享参数，和其他所有Worker的参数的copies：
+简而言之，只构建一个Graph，Graph中含有一套模型参数，放置在ps上；同时Graph中关于模型计算部分的多个副本，每个副本放置在一个Worker上，这样，多个Worker就可以同时训练同一个模型。这与tensorflow的单机多卡训练类似，单机多卡中每个GPU上的计算子图是相同的，但他们属于同一个Graph。
 
-![in-graph-replication](/img/in-post/tensorflow/in-graph-replication.png)
+使用图内复制时，所有op都在同一个图中，用一个client来生成图，把所有操作分配到集群所有ps和Worker上。图内复制和单机多卡类似，如果扩展到多机多卡，那么数据分发也要是在客户端的一个节点上。
 
-使用图内复制时，所有op都在同一个图中，用一个client来生成图，把所有操作分配到集群所有ps和Worker上。图内复制和单机多卡类似，扩展到多机多卡，数据分发还是在客户端一个节点上。
-
-所以此方式配置起来非常简单，只需要一个client生成，其他Worker只需要join，暴露一个网络接口，等在那里接受任务就好。但是，缺点就是训练数据的分发在一个Worker上，要把训练数据分到不同的机器上，严重影响了并发的训练速度。
+所以此方式配置起来非常简单，只需要一个client生成，其他Worker只需要join，暴露一个网络接口，等在那里接受任务就好。另外，由于图内复制各个Worker的计算子图都属于同一个Graph，所以实现同步训练会比较简单。但是，缺点就是训练数据的分发在一个Worker上，要把训练数据分到不同的机器上，严重影响了并发的训练速度。而且一旦负责生成Graph的这个client挂掉，那么整个系统就全部崩溃了，容错能力很差。
 
 总结：
 
-`优势`，计算节点只需要调用join()函数等待任务，客户端随时提交数据就可以训练。
+`优势`，计算节点只需要调用join()函数等待任务，客户端随时提交数据就可以训练；容易实现同步训练。
 
-`劣势`，训练数据分发在一个Worker上，要分发给不同Worker，严重影响并发训练速度。
+`劣势`，训练数据分发在一个Worker上，要分发给不同Worker，严重影响并发训练速度且容错能力差。
+
+代码示例：
+
+```python
+with tf.device("/job:ps/task:0"):
+  x = tf.placeholder(tf.float32, [None, n_input])
+  y = tf.placeholder(tf.float32, [None, n_classes])
+  keep_prob = tf.placeholder(tf.float32) #dropout (keep probability)
+
+
+  weights = {
+    # 5x5 conv, 1 input, 32 outputs
+    'wc1': tf.Variable(tf.random_normal([5, 5, 1, 32])),
+    # 5x5 conv, 32 inputs, 64 outputs
+    'wc2': tf.Variable(tf.random_normal([5, 5, 32, 64])),
+    # fully connected, 7*7*64 inputs, 1024 outputs
+    'wd1': tf.Variable(tf.random_normal([7*7*64, 1024])),
+    # 1024 inputs, 10 outputs (class prediction)
+    'out': tf.Variable(tf.random_normal([1024, n_classes]))
+  }
+
+  biases = {
+    'bc1': tf.Variable(tf.random_normal([32])),
+    'bc2': tf.Variable(tf.random_normal([64])),
+    'bd1': tf.Variable(tf.random_normal([1024])),
+    'out': tf.Variable(tf.random_normal([n_classes]))
+  }
+
+
+with tf.device("/job:worker/task:0"):
+  pred = conv_net(x, weights, biases, keep_prob)
+
+  cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=y))
+
+  # Evaluate model
+  correct_pred = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1))
+  accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+
+with tf.device("/job:worker/task:1"):
+  pred2 = conv_net(x, weights, biases, keep_prob)
+
+  cost2 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred2, labels=y))
+  # in-graph需要自己归并cost之类的。。。
+  cost3 = tf.add(cost,cost2)
+
+  optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost3)
+
+  # Evaluate model
+  correct_pred2 = tf.equal(tf.argmax(pred2, 1), tf.argmax(y, 1))
+  accuracy2 = tf.reduce_mean(tf.cast(correct_pred2, tf.float32))
+  accuracy3 = tf.add(accuracy2,accuracy)
+
+  # Initializing the variables
+  init = tf.global_variables_initializer()
+```
+
+
 
 **何谓图间复制？**
 
 > In this approach, there is a separate client for each `/job:worker` task, typically in the same process as the worker task. Each client builds a similar graph containing the parameters (pinned to `/job:ps`as before using [`tf.train.replica_device_setter`](https://www.tensorflow.org/api_docs/python/tf/train/replica_device_setter) to map them deterministically to the same tasks); and a single copy of the compute-intensive part of the model, pinned to the local task in `/job:worker`.
 
-简而言之，每个设备都有一份ps的共享参数，和自己的参数：
+使用图间复制时，每一个Worker各创建一个图，训练参数保存在ps，各个工作节点独立计算，计算完成把要更新的参数发给ps，ps更新参数即可。
 
-![between-graph-replication](/img/in-post/tensorflow/between-graph-replication.png)
+`优势` ：不需要数据分发，各个工作节点都创建图和读取数据训练，某个Worker挂掉不影响其他Worker训练。
 
-使用图间复制时，每一个Worker创建一个图，训练参数保存在ps，数据不分发，各个工作节点独立计算，计算完成把要更新的参数发给ps，ps更新参数即可。
-
-所以，图间复制时，训练的参数保存在ps，数据不用分发，数据分片的保存在各个Worker，各个Worker自己算自己的，算完后把要更新的参数告诉ps，ps更新参数。这种模式的优点是不用进行训练数据的分发，尤其数据量在TB级的时候，节省了大量的时间，所以大数据深度学习推荐使用图间复制模式。
-
-`优势` ：不需要数据分发，各个工作节点都创建图和读取数据训练。
-
-`劣势` ：Worker既是图创建者又是计算任务执行者，某个工作节点宕机影响集群工作。大数据相关深度学习推荐使用图间模式。
+`劣势` ：Worker既是图创建者又是计算任务执行者。
 
 ### 同步更新和异步更新
 
@@ -216,13 +263,74 @@ is_chief = (FLAGS.task_index == 0)
 
 #### 4. 图间复制分配参数和计算
 
-tensorflow中的`tf.train.replica_device_setter` 函数会自动将所有的参数分配到ps上，而将计算分配到当前的Worker上。如果有多个ps，就轮流循环分配：
+tensorflow中的`tf.train.replica_device_setter` 函数会自动将图内所有的参数Variables分配到ps上，而将计算分配到当前的Worker上。如果有多个ps，就轮流循环分配：
 
 ```python
 with tf.device(tf.train.replica_device_setter(
             cluster=cluster
     )):
+  	v1 = tf.Variable(...)  # assigned to /job:ps/task:0
+  	v2 = tf.Variable(...)  # assigned to /job:ps/task:1
+  	v3 = tf.Variable(...)  # assigned to /job:ps/task:0
+    a = v1 + v2  # assigned to /job:worker
 ```
+
+参数的init也是分配在ps上。
+
+可以自行确认：
+
+```python
+with tf.device(tf.train.replica_device_setter(cluster=cluster)):
+      v = tf.Variable([1, 2])
+      w = tf.Variable([2, 1])
+      a = v + w
+      self.assertDeviceEqual("/job:ps/task:0", v.device)
+      self.assertDeviceEqual("/job:ps/task:0", v.initializer.device)
+      self.assertDeviceEqual("/job:ps/task:1", w.device)
+      self.assertDeviceEqual("/job:ps/task:1", w.initializer.device)
+      self.assertDeviceEqual("/job:worker", a.device)
+```
+
+or：
+
+```python
+with tf.device(tf.train.replica_device_setter(
+                cluster=cluster)):
+            w = tf.Variable(0.0, name="weight")
+            b = tf.Variable(0.0, name="bias")
+            loss = tf.square(Y - tf.multiply(X, w) - b)
+            global_step = tf.Variable(0)
+            train_op = tf.train.AdagradOptimizer(0.01).minimize(
+                loss, global_step=global_step)
+            saver = tf.train.Saver()
+            summary_op = tf.summary.merge_all()
+            init_op = tf.global_variables_initializer()
+            
+            # test device replica:
+            print('define w in ',  w.device)
+            print('define b in ',  b.device)
+            print('define loss in ',  loss.device)
+            print('define global_step in ',  global_step.device)
+            print('define train_op in ',  train_op.device)
+            print('define init_op in ',  init_op.device)
+            print('init w in ',  w.initializer.device)
+            print('init b in ',  b.initializer.device)
+            print('init global_step in ',  global_step.initializer.device)
+            
+            # -------------output ----------------------
+            #define w in  /job:ps/task:0
+            #define b in  /job:ps/task:0
+            #define loss in  /job:worker
+            #define global_step in  /job:ps/task:0
+            #define train_op in  /job:ps/task:0
+            #define init_op in  /job:ps/task:0
+            #init w in  /job:ps/task:0
+            #init b in  /job:ps/task:0
+            #init global_step in  /job:ps/task:0
+             # -------------output ----------------------
+```
+
+
 
 #### 5. 定义计算图
 
