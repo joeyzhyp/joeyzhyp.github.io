@@ -236,12 +236,16 @@ if __name__ == '__main__':
     tf.app.run()
 ```
 
-然后用这同一份代码在不同的机器上运行：
+ `tf.train.Server` 为每一个设备构建一个server，而且它使得每一个在当前集群（Cluster）中的server都知道其他server在做什么。
 
-```bash
-python worker.py --job_name=ps --task_index=0
-python worker.py --job_name=worker --task_index=0
-python worker.py --job_name=worker --task_index=1
+> A tf.train.Server instance encapsulates a set of devices and a tf.Session target that can participate in distributed training. A server belongs to a cluster (specified by a tf.train.ClusterSpec), and corresponds to a particular task in a named job. The server can communicate with any other server in the same cluster.
+
+在后续过程中，我们需要用到`server.target`使得`tf.Session`能够连接到此server：
+
+```python
+server = tf.train.Server(...)
+with tf.Session(server.target):
+  # ...
 ```
 
 #### 2. 定义PS操作
@@ -253,6 +257,8 @@ if FLAGS.job_name == 'ps':
   	server.join()
 ```
 
+这里用到了`server.join()`  : Blocks until the server has shut down. This method currently blocks forever.
+
 #### 3. 定义Chief Worker
 
 在所有的Worker中，有且只有一个是Chief Worker，它除了负责计算外，还负责输出日志，保存模型等；这里设置task index为0的机器为chief worker：
@@ -263,7 +269,7 @@ is_chief = (FLAGS.task_index == 0)
 
 #### 4. 图间复制分配参数和计算
 
-tensorflow中的`tf.train.replica_device_setter` 函数会自动将图内所有的参数Variables分配到ps上，而将计算分配到当前的Worker上。如果有多个ps，就轮流循环分配：
+tensorflow中的`tf.train.replica_device_setter` 函数会自动将**此句之后所定义的**所有的参数Variables以及Variables ops分配到ps上，而将non-Variable ops分配到当前的Worker上。如果有多个ps，就轮流循环分配：
 
 ```python
 with tf.device(tf.train.replica_device_setter(
@@ -275,7 +281,7 @@ with tf.device(tf.train.replica_device_setter(
     a = v1 + v2  # assigned to /job:worker
 ```
 
-参数的init也是分配在ps上。
+即：variables以及对variables初始化，更新等op将会被自动分配在ps上；而其他计算将被分配在Worker上；
 
 可以自行确认：
 
@@ -328,6 +334,18 @@ with tf.device(tf.train.replica_device_setter(
             #init b in  /job:ps/task:0
             #init global_step in  /job:ps/task:0
              # -------------output ----------------------
+```
+
+此外，你也可以在`with tf.device(tf.train.replica_device_setter(cluster=cluster)):` 之外自行分配参数和计算。如：
+
+```python
+with tf.device("/job:ps/task:0"):
+	X = tf.placeholder(tf.float32, [100,128,128,3], name="X")
+with tf.device("/job:worker/task:0"):
+	... #training ops definition
+    train_step = (
+            tf.train.AdamOptimizer(learning_rate)
+            .minimize(loss, global_step=global_step)
 ```
 
 
@@ -431,7 +449,13 @@ with sv.managed_session(server.target, config=config) as sess:
       	sess.run([train_op, global_step])
 ```
 
+然后用这同一份代码在不同的机器上运行：
 
+```bash
+python worker.py --job_name=ps --task_index=0
+python worker.py --job_name=worker --task_index=0
+python worker.py --job_name=worker --task_index=1
+```
 
 #### 附：同步模式区别
 
@@ -525,3 +549,75 @@ chief woker做额外工作的原因见此目录附。
 由于初始PS不会更新参数发布同步标记，所以需要初始化同步标记队列——sync_init_op，直接向队列注入N个0标记。
 
 > 同步标记队列即是由chief Worker来实现
+
+## 注意
+
+按`ctrl z` 退出程序，并且需要执行 `ps -a ` 以及 `kill -9 xxx` 来杀掉进程
+
+## 问题
+
+### 1. CreateSession still waiting for response from worker
+
+所有分布式进程都启动后，chief worker进程不断在打印如下信息，没有开始训练:
+
+```bash
+I tensorflow/core/distributed_runtime/master.cc:221] CreateSession still waiting for response from worker: /job:ps/replica:0/task:0
+I tensorflow/core/distributed_runtime/master.cc:221] CreateSession still waiting for response from worker: /job:worker/replica:0/task:1
+I tensorflow/core/distributed_runtime/master.cc:221] CreateSession still waiting for response from worker: /job:ps/replica:0/task:0
+I tensorflow/core/distributed_runtime/master.cc:221] CreateSession still waiting for response from worker: /job:worker/replica:0/task:1
+```
+
+**解决方案：**
+
+首先保证job_name,task_index,ps_hosts,worker_hosts这四个参数都是正确的,考虑以下这种情况是不正确的：
+
+在一个IP为192.168.1.100的机器上启动ps或worker进程：
+
+--job_name=worker
+
+--task_index=1
+
+--ps_hosts=192.168.1.100:2222,192.168.1.101:2222
+
+--worker_hosts=192.168.1.100:2223,192.168.1.101:2223
+
+因为该进程启动位置是192.168.1.100，但是运行参数中指定的task_index为1，对应的IP地址是ps_hosts或worker_hosts的第二项（第一项的task_index为0)，也就是192.168.1.101，和进程本身所在机器的IP不一致。
+
+如果以上正确，那么考虑使用 ` device_filters` :
+
+启动分布式TF集群时，每个节点都会启动一个Server. 默认情况下，每个节点都会跟其他节点进行通信，然后再开始创建Session. 在集群节点多时，会带来两个问题：
+
+1. 由于每个节点两两通信，造成训练的启动会比较慢。
+2. 当某些worker挂掉重启（例如因为内存消耗过多），如果其他某些worker已经跑完结束了，重启后的worker就会卡住，一直等待其他的worker。此时会显示log: `CreateSession still waiting for response from worker: /job:worker/replica:0/task:x`.
+
+解决这个问题的方法是使用device filter. 例如:
+
+```python
+config = tf.ConfigProto(
+        log_device_placement=True,
+        device_filters=["/job:ps", "/job:worker/task:%d" % FLAGS.task_index]
+    )
+
+with sv.managed_session(server.target, config=config) as sess:
+```
+
+另外一种情况也会导致该问题的发生，从TensorFlow-1.4开始，分布式会自动使用环境变量中的代理去连接，如果运行的节点之间不需要代理互连，那么将代理的环境变量移除即可，在脚本的开始位置添加代码：
+
+```python
+# 注意这段代码必须写在import tensorflow as tf或者import moxing.tensorflow as mox之前
+
+import os
+
+os.enrivon.pop('http_proxy')
+os.enrivon.pop('https_proxy')
+```
+
+
+
+> 参考链接：
+>
+> [1. 使用device_filters ](http://blog.codescv.com/2018/05/20/dist-tf-for-sparse-models.html)
+>
+> [2. http_proxy ](https://bbs.huaweicloud.com/blogs/463145f7a1d111e89fc57ca23e93a89f)
+>
+> [3. GitHub Issue](https://github.com/tensorflow/tensorflow/issues/12745)
